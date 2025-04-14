@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from signal import SIGINT, Signals, signal
 from types import FrameType
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import ImageGoNord
 from pick import pick
@@ -19,16 +19,19 @@ Images = list[Image]
 out_path = ""
 
 
+
 @dataclass
 class Arguments:
     """
     Attributes:
         palette (Palette | None): The selected palette value.
         images (list[Image]): List of image path strings.
+        out_path (str): The output directory path as a string.
     """
 
-    palette: Palette | None
-    images: list[Image] = field(default_factory=list[Image])
+    palette: Optional[Palette]
+    images: list[Image] = field(default_factory=list)
+    out_path: str = ""
 
 
 class Parser(argparse.ArgumentParser):
@@ -274,10 +277,10 @@ class GruvboxFactory:
         parent = os.path.dirname(path)
         base = os.path.basename(path)
         dest = os.path.join(parent, f"gruvbox_{base}")
-        if os.path.isdir(out_path):
-            dest = os.path.join(out_path, base)
+        if os.path.isdir(self.parser.arguments.out_path):
+            dest = os.path.join(self.parser.arguments.out_path, base)
         else:
-            self.console.print("out_path was not a valid directory. Using image path as output directory.")
+            self.console.print("--out was not a valid directory. Using image path as output directory.")
 
         self.console.print(f"🔨 [yellow]manufacturing '{base}' -> {dest}[/]")
         self.factory.convert_image(image, save_path=dest, parallel_threading=True)
