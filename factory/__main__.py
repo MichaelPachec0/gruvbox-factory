@@ -16,6 +16,7 @@ from rich import console, panel
 Palette = Literal["pink", "white", "mix"]
 Image = str
 Images = list[Image]
+out_path = ""
 
 
 @dataclass
@@ -61,6 +62,9 @@ class Parser(argparse.ArgumentParser):
         self.add_argument(
             "-i", "--images", nargs="+", type=str, help="path(s) to the image(s)."
         )
+        self.add_argument(
+            "-o", "--out", nargs="?", type=str, default="", help="Path to output dir.",
+        )
 
         self._parsed_args: argparse.Namespace  # type: ignore
         self.arguments: Arguments  # type: ignore
@@ -77,7 +81,7 @@ class Parser(argparse.ArgumentParser):
         """
         self._parsed_args = self.parse_args()
         self.arguments = Arguments(
-            palette=self._parsed_args.palette, images=self._parsed_args.images
+            palette=self._parsed_args.palette, images=self._parsed_args.images, out_path=self._parsed_args.out
         )
 
 
@@ -270,6 +274,10 @@ class GruvboxFactory:
         parent = os.path.dirname(path)
         base = os.path.basename(path)
         dest = os.path.join(parent, f"gruvbox_{base}")
+        if os.path.isdir(out_path):
+            dest = os.path.join(out_path, base)
+        else:
+            self.console.print("out_path was not a valid directory. Using image path as output directory.")
 
         self.console.print(f"🔨 [yellow]manufacturing '{base}' -> {dest}[/]")
         self.factory.convert_image(image, save_path=dest, parallel_threading=True)
