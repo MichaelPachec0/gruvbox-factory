@@ -1,6 +1,8 @@
 import argparse
 import os
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from signal import SIGINT, Signals, signal
@@ -8,7 +10,10 @@ from types import FrameType
 from typing import Any, Literal
 
 import ImageGoNord
+from factory.video import process_video
 from pick import pick
+from PIL import ImageSequence
+from PIL import Image as PillowImage
 from PIL.Image import Image as PilImage
 from PIL.ImageFile import ImageFile
 from rich import console, panel
@@ -23,11 +28,13 @@ class Arguments:
     """
     Attributes:
         palette (Palette | None): The selected palette value.
-        images (list[Image]): List of image path strings.
+        input (list[Image]): List of input path strings.
+        fast (bool): Whether to use fast quantization for video/gif.
     """
 
     palette: Palette | None
-    images: list[Image] = field(default_factory=list[Image])
+    input: list[Image] = field(default_factory=list[Image])
+    fast: bool = False
 
 
 class Parser(argparse.ArgumentParser):
@@ -58,8 +65,16 @@ class Parser(argparse.ArgumentParser):
             const="pink",
             help="choose your palette, panther 'pink' (default), snoopy 'white' or smooth 'mix'",
         )
+
         self.add_argument(
-            "-i", "--images", nargs="+", type=str, help="path(s) to the image(s)."
+            "-i", "--input", nargs="+", type=str, help="path(s) to the image(s), gif(s) or video(s)."
+        )
+
+        self.add_argument(
+            "-f",
+            "--fast",
+            action="store_true",
+            help="use fast quantization for video/gif (recommended for videos, especially 4K).",
         )
 
         self._parsed_args: argparse.Namespace  # type: ignore
@@ -77,7 +92,9 @@ class Parser(argparse.ArgumentParser):
         """
         self._parsed_args = self.parse_args()
         self.arguments = Arguments(
-            palette=self._parsed_args.palette, images=self._parsed_args.images
+            palette=self._parsed_args.palette,
+            input=self._parsed_args.input,
+            fast=self._parsed_args.fast,
         )
 
 
@@ -194,6 +211,7 @@ class GruvboxFactory:
         self.console: Console = Console()
         self.parser: Parser = Parser()
         self.factory: Factory = Factory()
+        self.fast: bool = False
 
     def get_palette(self) -> Palette:
         """
@@ -266,13 +284,39 @@ class GruvboxFactory:
         Returns:
             None.
         """
-        image: PilImage | ImageFile = self.factory.open_image(path)
         parent = os.path.dirname(path)
         base = os.path.basename(path)
         dest = os.path.join(parent, f"gruvbox_{base}")
 
         self.console.print(f"🔨 [yellow]manufacturing '{base}' -> {dest}[/]")
-        self.factory.convert_image(image, save_path=dest, parallel_threading=True)
+
+        if path.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
+            process_video(path, dest, self.factory, fast=self.fast, console=self.console)
+        elif path.lower().endswith(".gif"):
+            image = PillowImage.open(path)
+            if not getattr(image, "is_animated", False):
+                if self.fast:
+                    self.factory.quantize_image(image, save_path=dest)
+                else:
+                    self.factory.convert_image(image, save_path=dest, parallel_threading=True)
+            else:
+                frames = []
+                durations = []
+                for frame in ImageSequence.Iterator(image):
+                    durations.append(frame.info.get("duration", 100))
+                    if self.fast:
+                        new_frame = self.factory.quantize_image(frame.convert("RGB"))
+                    else:
+                        new_frame = self.factory.convert_image(frame.convert("RGB"), parallel_threading=True)
+                    frames.append(new_frame)
+                frames[0].save(dest, save_all=True, append_images=frames[1:], duration=durations, loop=image.info.get("loop", 0), optimize=False)
+        else:
+            image: PilImage | ImageFile = self.factory.open_image(path)
+            if self.fast:
+                self.factory.quantize_image(image, save_path=dest)
+            else:
+                self.factory.convert_image(image, save_path=dest, parallel_threading=True)
+
         self.console.print(f"✅ [bold green]Done![/] [green](saved to '{dest}')[/]")
 
     def process_images(self, images: Images) -> bool:
@@ -320,7 +364,8 @@ def main() -> None:
     factory = GruvboxFactory()
 
     factory.parser.parse()
-    image_paths = factory.parser.arguments.images
+    inputs = factory.parser.arguments.input
+    factory.fast = factory.parser.arguments.fast
 
     if len(sys.argv) < 2:
         sys.exit(factory.parser.print_help())
@@ -328,7 +373,10 @@ def main() -> None:
     palette = factory.get_palette()
     factory.add_palette(palette)
 
-    if factory.process_images(image_paths) is not True:
+    if not inputs:
+        inputs = factory.select_paths()
+
+    if factory.process_images(inputs) is not True:
         sys.exit(1)
 
     sys.exit(0)

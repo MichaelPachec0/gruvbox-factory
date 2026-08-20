@@ -12,6 +12,13 @@
 ## Installation ️and usage
 `pip install gruvbox-factory`
 
+### Prerequisites (for video support)
+If you want to convert videos, you must have **ffmpeg** installed on your system.
+- **Ubuntu/Debian:** `sudo apt install ffmpeg`
+- **Arch Linux:** `sudo pacman -S ffmpeg`
+- **macOS:** `brew install ffmpeg`
+- **Windows:** Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add the `bin` folder to your system PATH.
+
 You can type `gruvbox-factory -h` to check out how to use Gruvbox Factory.
 
 
