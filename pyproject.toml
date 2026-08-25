@@ -48,6 +48,11 @@ dependencies = [
 "Homepage" = "https://github.com/paulopacitti/gruvbox-factory"
 "Bug Tracker" = "https://github.com/paulopacitti/gruvbox-factory/issues"
 
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]
+
 [project.scripts]
 gruvbox-factory = "factory.__main__:main"
 
@@ -67,3 +72,15 @@ select = ["E", "F", "I", "UP", "B", "TRY", "BLE", "RET", "PLR"]
 # Both files are rewritten in part 2; these suppressions are deleted with them.
 "factory/__main__.py" = ["PLR0912"]
 "factory/video.py" = ["TRY300", "BLE001"]
+# Comparing against a literal is what a test is for.
+"tests/*" = ["PLR2004"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# No -m default here on purpose. Every nix check names its marker explicitly,
+# so a check can never pass by silently selecting nothing. The fast local
+# default is a pytest alias in the devShell instead.
+addopts = "-q -p no:cacheprovider"
+markers = [
+    "slow: builds a real 16 MiB LUT or converts the full-size example.png",
+]

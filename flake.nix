@@ -80,6 +80,40 @@
             "gruvbox-factory-${name}-env"
             workspace.deps.default
         ) interpreters;
+
+      # The project plus its dev dependency group. workspace.deps.all enables
+      # every optional-dependency and every dependency-group; deps.default
+      # (used by packages.*) enables neither, so the shipped environment never
+      # carries pytest.
+      mkTestEnv =
+        system: python:
+        (mkPythonSet system python).mkVirtualEnv
+          "gruvbox-factory-test-env"
+          workspace.deps.all;
+
+      # Run pytest over a writable copy of the flake source. The copy is
+      # required: the source is a read-only store path, and pytest, numpy and
+      # Pillow all want to write beside their inputs.
+      mkPytestCheck =
+        system: name: python: marker:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        pkgs.runCommandLocal "gruvbox-factory-${name}"
+          {
+            nativeBuildInputs = [ (mkTestEnv system python) ];
+          }
+          ''
+            cp -r ${self} source
+            chmod -R u+w source
+            cd source
+            export HOME="$TMPDIR/home"
+            export XDG_CACHE_HOME="$TMPDIR/cache"
+            export PYTHONDONTWRITEBYTECODE=1
+            mkdir -p "$HOME" "$XDG_CACHE_HOME"
+            pytest -m ${lib.escapeShellArg marker} tests/
+            touch $out
+          '';
     in
     {
       packages = forAllSystems (
@@ -103,6 +137,15 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         (mkEnvs system)
+        # The fast suite runs on every interpreter the build matrix covers,
+        # including the free-threaded one. The goldens are numerically
+        # identical on all three, so they run once.
+        // (lib.mapAttrs' (
+             name: getPython:
+             lib.nameValuePair "tests-${name}" (
+               mkPytestCheck system "tests-${name}" (getPython pkgs) "not slow"
+             )
+           ) interpreters)
         // {
           lint =
             pkgs.runCommandLocal "gruvbox-factory-ruff"
@@ -111,9 +154,11 @@
               }
               ''
                 cd ${self}
-                ruff check --no-cache factory/
+                ruff check --no-cache factory/ tests/
                 touch $out
               '';
+
+          golden = mkPytestCheck system "golden" pkgs.python313 "slow";
         }
       );
 
@@ -140,6 +185,9 @@
             shellHook = ''
               unset PYTHONPATH
               export REPO_ROOT=$(git rev-parse --show-toplevel)
+              # The slow tests build real 16 MiB tables. Run them on purpose:
+              #   \pytest -m slow      (the backslash bypasses this alias)
+              alias pytest="pytest -m 'not slow'"
             '';
           };
         }
