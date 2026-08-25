@@ -1,0 +1,49 @@
+name: check
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - name: ruff check
+        run: nix build .#checks.x86_64-linux.lint -L
+
+  build:
+    name: build (${{ matrix.interpreter }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Do not cancel the 3.13 and 3.14 lanes when the free-threaded one fails;
+      # knowing which interpreters still work is the point of the matrix.
+      fail-fast: false
+      matrix:
+        interpreter: [py313, py314, py314t]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - name: build environment
+        run: nix build .#${{ matrix.interpreter }} -L
+      - name: verify interpreter
+        run: |
+          ./result/bin/python -c "
+          import sys, PIL, numpy
+          print('version:', sys.version)
+          print('gil enabled:', sys._is_gil_enabled())
+          print('PIL', PIL.__version__, 'numpy', numpy.__version__)
+          "
