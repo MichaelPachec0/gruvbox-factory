@@ -30,11 +30,13 @@ class Arguments:
         palette (Palette | None): The selected palette value.
         input (list[Image]): List of input path strings.
         fast (bool): Whether to use fast quantization for video/gif.
+        out_path (str): Output directory. Empty means write beside the source.
     """
 
     palette: Palette | None
     input: list[Image] = field(default_factory=list[Image])
     fast: bool = False
+    out_path: str = ""
 
 
 class Parser(argparse.ArgumentParser):
@@ -76,6 +78,13 @@ class Parser(argparse.ArgumentParser):
             action="store_true",
             help="use fast quantization for video/gif (recommended for videos, especially 4K).",
         )
+        self.add_argument(
+            "-o",
+            "--out",
+            type=str,
+            default="",
+            help="directory to write output into (default: beside the source).",
+        )
 
         self._parsed_args: argparse.Namespace  # type: ignore
         self.arguments: Arguments  # type: ignore
@@ -95,6 +104,7 @@ class Parser(argparse.ArgumentParser):
             palette=self._parsed_args.palette,
             input=self._parsed_args.input,
             fast=self._parsed_args.fast,
+            out_path=self._parsed_args.out,
         )
 
 
@@ -287,6 +297,14 @@ class GruvboxFactory:
         parent = os.path.dirname(path)
         base = os.path.basename(path)
         dest = os.path.join(parent, f"gruvbox_{base}")
+        out_path = self.parser.arguments.out_path
+        if out_path:
+            if os.path.isdir(out_path):
+                dest = os.path.join(out_path, f"gruvbox_{base}")
+            else:
+                self.console.print(
+                    f"[yellow]--out '{out_path}' is not a directory. Writing beside the source.[/]"
+                )
 
         self.console.print(f"🔨 [yellow]manufacturing '{base}' -> {dest}[/]")
 
