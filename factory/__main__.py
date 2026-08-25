@@ -1,8 +1,6 @@
 import argparse
 import os
-import shutil
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from signal import SIGINT, Signals, signal
@@ -10,13 +8,14 @@ from types import FrameType
 from typing import Any, Literal
 
 import ImageGoNord
-from factory.video import process_video
 from pick import pick
-from PIL import ImageSequence
 from PIL import Image as PillowImage
+from PIL import ImageSequence
 from PIL.Image import Image as PilImage
 from PIL.ImageFile import ImageFile
 from rich import console, panel
+
+from factory.video import process_video
 
 Palette = Literal["pink", "white", "mix"]
 Image = str
@@ -260,8 +259,6 @@ class GruvboxFactory:
 
         for color in colors:
             self.factory.add_color_to_palette(color)
-
-        return None
 
     def select_paths(self) -> list[str]:
         """

@@ -1,7 +1,7 @@
 import os
 import shutil
 import tempfile
-from typing import Any, Callable
+from typing import Any
 
 import ffmpeg
 from PIL import Image as PillowImage

@@ -59,3 +59,11 @@ include = ["factory"]
 
 [tool.setuptools.package-data]
 factory = ["gruvbox-white.txt", "gruvbox-pink.txt", "gruvbox-mix.txt"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "TRY", "BLE", "RET", "PLR"]
+
+[tool.ruff.lint.per-file-ignores]
+# Both files are rewritten in part 2; these suppressions are deleted with them.
+"factory/__main__.py" = ["PLR0912"]
+"factory/video.py" = ["TRY300", "BLE001"]
