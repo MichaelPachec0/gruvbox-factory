@@ -239,13 +239,13 @@ class GruvboxFactory:
         Returns:
             Palette: The valid palette value from command-line arguments or via TUI.
         Raises:
-            Exception: If no valid palette is determined (should be unreachable).
+            AssertionError: If no valid palette is determined.
         """
         palette: Palette | None = self.parser.arguments.palette
         palette = palette if palette is not None else select_palette()
         if is_palette(palette):
             return palette
-        raise Exception("This is unreachable.")
+        raise AssertionError("unreachable")
 
     def add_palette(self, palette: str) -> None:
         """
@@ -410,7 +410,7 @@ def main() -> None:
     inputs = factory.parser.arguments.input
     factory.fast = factory.parser.arguments.fast
 
-    if len(sys.argv) < 2:
+    if not sys.argv[1:]:
         sys.exit(factory.parser.print_help())
 
     palette = factory.get_palette()
