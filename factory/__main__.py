@@ -40,7 +40,8 @@ class Arguments:
 
 class Parser(argparse.ArgumentParser):
     """
-    A subclass of argparse.ArgumentParser that stores parsed arguments in an Arguments instance.
+    A subclass of argparse.ArgumentParser that stores parsed arguments in an
+    Arguments instance.
     """
 
     def __init__(self) -> None:
@@ -64,18 +65,28 @@ class Parser(argparse.ArgumentParser):
             nargs="?",
             default="pink",
             const="pink",
-            help="choose your palette, panther 'pink' (default), snoopy 'white' or smooth 'mix'",
+            help=(
+                "choose your palette, panther 'pink' (default), "
+                "snoopy 'white' or smooth 'mix'"
+            ),
         )
 
         self.add_argument(
-            "-i", "--input", nargs="+", type=str, help="path(s) to the image(s), gif(s) or video(s)."
+            "-i",
+            "--input",
+            nargs="+",
+            type=str,
+            help="path(s) to the image(s), gif(s) or video(s).",
         )
 
         self.add_argument(
             "-f",
             "--fast",
             action="store_true",
-            help="use fast quantization for video/gif (recommended for videos, especially 4K).",
+            help=(
+                "use fast quantization for video/gif "
+                "(recommended for videos, especially 4K)."
+            ),
         )
         self.add_argument(
             "-o",
@@ -94,7 +105,8 @@ class Parser(argparse.ArgumentParser):
 
         Sets:
             self._parsed_args (argparse.Namespace): Raw parsed args.
-            self.arguments (Arguments): Parsed arguments converted to an Arguments instance.
+            self.arguments (Arguments): Parsed arguments converted to an
+                Arguments instance.
         Returns: None.
         Raises: None.
         """
@@ -300,20 +312,25 @@ class GruvboxFactory:
                 dest = os.path.join(out_path, f"gruvbox_{base}")
             else:
                 self.console.print(
-                    f"[yellow]--out '{out_path}' is not a directory. Writing beside the source.[/]"
+                    f"[yellow]--out '{out_path}' is not a directory. "
+                    f"Writing beside the source.[/]"
                 )
 
         self.console.print(f"🔨 [yellow]manufacturing '{base}' -> {dest}[/]")
 
         if path.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
-            process_video(path, dest, self.factory, fast=self.fast, console=self.console)
+            process_video(
+                path, dest, self.factory, fast=self.fast, console=self.console
+            )
         elif path.lower().endswith(".gif"):
             image = PillowImage.open(path)
             if not getattr(image, "is_animated", False):
                 if self.fast:
                     self.factory.quantize_image(image, save_path=dest)
                 else:
-                    self.factory.convert_image(image, save_path=dest, parallel_threading=True)
+                    self.factory.convert_image(
+                        image, save_path=dest, parallel_threading=True
+                    )
             else:
                 frames = []
                 durations = []
@@ -322,15 +339,26 @@ class GruvboxFactory:
                     if self.fast:
                         new_frame = self.factory.quantize_image(frame.convert("RGB"))
                     else:
-                        new_frame = self.factory.convert_image(frame.convert("RGB"), parallel_threading=True)
+                        new_frame = self.factory.convert_image(
+                            frame.convert("RGB"), parallel_threading=True
+                        )
                     frames.append(new_frame)
-                frames[0].save(dest, save_all=True, append_images=frames[1:], duration=durations, loop=image.info.get("loop", 0), optimize=False)
+                frames[0].save(
+                    dest,
+                    save_all=True,
+                    append_images=frames[1:],
+                    duration=durations,
+                    loop=image.info.get("loop", 0),
+                    optimize=False,
+                )
         else:
             image: PilImage | ImageFile = self.factory.open_image(path)
             if self.fast:
                 self.factory.quantize_image(image, save_path=dest)
             else:
-                self.factory.convert_image(image, save_path=dest, parallel_threading=True)
+                self.factory.convert_image(
+                    image, save_path=dest, parallel_threading=True
+                )
 
         self.console.print(f"✅ [bold green]Done![/] [green](saved to '{dest}')[/]")
 
