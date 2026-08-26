@@ -13,10 +13,15 @@ converts correctly and keeps the name the user asked for.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 
+import ffmpeg
 import numpy as np
 from PIL import Image
 
@@ -43,6 +48,28 @@ class PaletteTooLargeError(ValueError):
 
     def __init__(self, size: int) -> None:
         super().__init__(f"palette has {size} colors; GIF allows at most 255")
+
+
+class OddDimensionsError(ValueError):
+    """Video dimensions the yuv420p pixel format cannot encode."""
+
+    def __init__(self, width: int, height: int) -> None:
+        super().__init__(f"{width}x{height}: yuv420p needs even dimensions")
+
+
+class UnknownFrameRateError(ValueError):
+    """A stream whose frame rate cannot be determined."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(f"{path.name}: no usable frame rate")
+
+
+class EncoderError(RuntimeError):
+    """ffmpeg exited non-zero while encoding."""
+
+    def __init__(self, dest: Path, detail: str = "") -> None:
+        suffix = f": {detail}" if detail else ""
+        super().__init__(f"encoder failed writing {dest.name}{suffix}")
 
 
 class UnopenedSourceError(RuntimeError):
@@ -204,6 +231,171 @@ class GifSource:
         pages[0].save(dest, **options)
 
 
+@dataclass(frozen=True, slots=True)
+class VideoInfo:
+    width: int
+    height: int
+    fps: float
+    n_frames: int | None
+    has_audio: bool
+
+
+def probe(path: Path | str) -> VideoInfo:
+    """Stream geometry and frame count.
+
+    nb_frames is absent in some containers, so fall back to duration times
+    frame rate and finally to None. Both consumers, the kernel selector and
+    the progress bar, tolerate an estimate: a wrong count changes how smooth a
+    bar looks and nothing else.
+
+    An unusable frame rate is fatal rather than defaulted. Re-encoding at a
+    guessed rate would produce a video that plays at the wrong speed, which is
+    the quiet corruption this project exists to remove.
+    """
+    resolved = Path(path)
+    data = ffmpeg.probe(str(resolved))
+    video = next(s for s in data["streams"] if s["codec_type"] == "video")
+    numerator, _, denominator = video.get("avg_frame_rate", "0/0").partition("/")
+    fps = float(numerator) / float(denominator) if float(denominator or 0) else 0.0
+    if not fps:
+        raise UnknownFrameRateError(resolved)
+    reported = video.get("nb_frames")
+    if reported is not None and str(reported).isdigit():
+        count: int | None = int(reported)
+    elif video.get("duration"):
+        count = round(float(video["duration"]) * fps)
+    else:
+        count = None
+    return VideoInfo(
+        width=int(video["width"]),
+        height=int(video["height"]),
+        fps=fps,
+        n_frames=count,
+        has_audio=any(s["codec_type"] == "audio" for s in data["streams"]),
+    )
+
+
+class VideoSource:
+    """Video through an ffmpeg rawvideo pipe, with the audio remuxed back.
+
+    Frames arrive as RGB24 and carry no alpha, so the transparency rule never
+    applies. ``keep_metadata`` is accepted and ignored: none of the metadata
+    policy survives a video container.
+
+    Any failure aborts. A partially converted video is the same class of
+    silent corruption as the defect this project started from, so the
+    temporary file and both subprocesses are released on every exit path.
+    """
+
+    def __init__(self, path: Path, palette: Palette, *, keep_metadata: bool) -> None:
+        self.path = path
+        self.palette = palette
+        self.info: VideoInfo | None = None
+        self.n_frames: int | None = None
+        self._decoder: Any = None
+        self._encoder: Any = None
+        self._temporary: Path | None = None
+
+    def __enter__(self) -> Self:
+        info = probe(self.path)
+        if info.width % 2 or info.height % 2:
+            raise OddDimensionsError(info.width, info.height)
+        self.info = info
+        self.n_frames = info.n_frames
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        # Close the encoder's stdin before killing it. Left open, the pipe is
+        # finalised during garbage collection and raises BrokenPipeError,
+        # which prints an ignored-exception traceback that reads like a crash.
+        if self._encoder is not None and self._encoder.stdin is not None:
+            with contextlib.suppress(BrokenPipeError, OSError):
+                self._encoder.stdin.close()
+        for process in (self._decoder, self._encoder):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+        self._decoder = self._encoder = None
+        if self._temporary is not None and self._temporary.exists():
+            self._temporary.unlink()
+        self._temporary = None
+
+    def frames(self) -> Iterator[np.ndarray]:
+        if self.info is None:
+            raise UnopenedSourceError(self.path)
+        self._decoder = (
+            ffmpeg.input(str(self.path))
+            .output("pipe:", format="rawvideo", pix_fmt="rgb24")
+            .run_async(pipe_stdout=True, quiet=True)
+        )
+        size = self.info.width * self.info.height * 3
+        while True:
+            raw = self._decoder.stdout.read(size)
+            if len(raw) < size:
+                break
+            yield np.frombuffer(raw, np.uint8).reshape(
+                self.info.height, self.info.width, 3
+            )
+        self._decoder.wait()
+
+    def _stderr_tail(self, lines: int = 2) -> str:
+        """The last few lines of the encoder's stderr, for an error message."""
+        if self._encoder is None or self._encoder.stderr is None:
+            return ""
+        captured = self._encoder.stderr.read().decode("utf-8", "replace").strip()
+        return " | ".join(captured.splitlines()[-lines:])
+
+    def write(self, frames: Iterator[np.ndarray], dest: Path) -> None:
+        if self.info is None:
+            raise UnopenedSourceError(self.path)
+        dest = Path(dest)
+        # The temporary lives beside the destination because os.replace is
+        # only atomic within one filesystem, and the system temp dir often is
+        # not the same one.
+        # The suffix matters: ffmpeg picks its muxer from the filename, and a
+        # generic .tmp makes it exit 234 having written nothing.
+        handle, name = tempfile.mkstemp(
+            prefix=".gruvbox-", suffix=dest.suffix, dir=dest.parent
+        )
+        os.close(handle)
+        self._temporary = Path(name)
+        self._encoder = (
+            ffmpeg.input(
+                "pipe:",
+                format="rawvideo",
+                pix_fmt="rgb24",
+                s=f"{self.info.width}x{self.info.height}",
+                framerate=self.info.fps,
+            )
+            .output(str(self._temporary), pix_fmt="yuv420p", vcodec="libx264")
+            .overwrite_output()
+            .run_async(pipe_stdin=True, pipe_stderr=True, quiet=True)
+        )
+        try:
+            for frame in frames:
+                self._encoder.stdin.write(np.ascontiguousarray(frame).tobytes())
+            self._encoder.stdin.close()
+        except BrokenPipeError as exc:
+            # The encoder died mid-stream. Its stderr says why; without this
+            # the caller would only see a pipe error from inside a generator.
+            self._encoder.wait()
+            raise EncoderError(dest, self._stderr_tail()) from exc
+        if self._encoder.wait() != 0:
+            raise EncoderError(dest, self._stderr_tail())
+        if self.info.has_audio:
+            ffmpeg.output(
+                ffmpeg.input(str(self._temporary)),
+                ffmpeg.input(str(self.path)).audio,
+                str(dest),
+                vcodec="copy",
+                acodec="copy",
+            ).overwrite_output().run(quiet=True)
+            self._temporary.unlink()
+        else:
+            os.replace(self._temporary, dest)
+        self._temporary = None
+
+
 def open_source(
     path: Path | str, palette: Palette, *, keep_metadata: bool = False
 ) -> Source:
@@ -219,4 +411,6 @@ def open_source(
         return StillSource(resolved, palette, keep_metadata=keep_metadata)
     if suffix in GIF_SUFFIXES:
         return GifSource(resolved, palette, keep_metadata=keep_metadata)
+    if suffix in VIDEO_SUFFIXES:
+        return VideoSource(resolved, palette, keep_metadata=keep_metadata)
     raise UnsupportedFormatError(resolved)
