@@ -20,12 +20,15 @@ from typing import Protocol, Self
 import numpy as np
 from PIL import Image
 
-from factory import metadata
+from factory import kernel, metadata
 from factory.palette import Palette
 
 STILL_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"})
 GIF_SUFFIXES = frozenset({".gif"})
 VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm"})
+
+# GIF holds 256 palette entries and one must be reserved for transparency.
+_GIF_MAX_COLORS = 255
 
 
 class UnsupportedFormatError(ValueError):
@@ -33,6 +36,13 @@ class UnsupportedFormatError(ValueError):
 
     def __init__(self, path: Path) -> None:
         super().__init__(f"unsupported file type: {path.name}")
+
+
+class PaletteTooLargeError(ValueError):
+    """A palette leaving no free GIF index for transparency."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__(f"palette has {size} colors; GIF allows at most 255")
 
 
 class UnopenedSourceError(RuntimeError):
@@ -110,6 +120,90 @@ class StillSource:
         )
 
 
+class GifSource:
+    """An animated or single-frame GIF.
+
+    ``keep_metadata`` is accepted and ignored. GIF stores none of what the
+    metadata policy covers: Pillow accepts icc_profile, dpi, exif and xmp on a
+    GIF save and discards all four silently, so passing them through would
+    look like preservation that is not happening.
+    """
+
+    def __init__(self, path: Path, palette: Palette, *, keep_metadata: bool) -> None:
+        if len(palette) > _GIF_MAX_COLORS:
+            raise PaletteTooLargeError(len(palette))
+        self.path = path
+        self.palette = palette
+        self.n_frames: int | None = None
+        self._image: Image.Image | None = None
+        self._durations: list[int] = []
+        self._disposals: list[int] = []
+        self._loop: int | None = None
+
+    def __enter__(self) -> Self:
+        self._image = Image.open(self.path)
+        self.n_frames = self._image.n_frames
+        # A still GIF carries no loop. Defaulting it to 0 would mean "loop
+        # forever" and turn a static image into a one-frame animation.
+        self._loop = self._image.info.get("loop")
+        for index in range(self.n_frames):
+            self._image.seek(index)
+            self._durations.append(self._image.info.get("duration", 100))
+            # Not frame.info["disposal"], which Pillow leaves as None on every
+            # frame. The real value is on the image object after seek.
+            self._disposals.append(self._image.disposal_method)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._image is not None:
+            self._image.close()
+            self._image = None
+
+    def frames(self) -> Iterator[np.ndarray]:
+        if self._image is None:
+            raise UnopenedSourceError(self.path)
+        for index in range(self._image.n_frames):
+            self._image.seek(index)
+            # Frame 0 arrives as P and later frames as RGBA, because Pillow
+            # composites. Convert every frame rather than trusting the first.
+            yield np.array(self._image.convert("RGBA"))
+
+    def _paletted(self, rgba: np.ndarray) -> Image.Image:
+        """Map onto an explicit P palette, reserving one index for alpha.
+
+        An explicit table means no adaptive quantiser runs, so the encode is a
+        pure lookup and the output is byte-deterministic.
+        """
+        transparent = len(self.palette)
+        flat = rgba[..., :3].reshape(-1, 3).astype(np.int16)
+        table = kernel.nearest(flat, self.palette).reshape(rgba.shape[:2]).copy()
+        table[rgba[..., 3] == 0] = transparent
+        page = Image.fromarray(table, mode="P")
+        entries = list(np.asarray(self.palette.rgb).astype(np.uint8).reshape(-1))
+        page.putpalette(entries + [0] * (768 - len(entries)))
+        return page
+
+    def write(self, frames: Iterator[np.ndarray], dest: Path) -> None:
+        # Accumulates rather than streams: Pillow's GIF encoder has no
+        # streaming interface, save_all needs every page at once.
+        pages = [self._paletted(frame) for frame in frames]
+        single = len(pages) == 1
+        options: dict[str, object] = {
+            "save_all": True,
+            "append_images": pages[1:],
+            # Pillow's single-frame path writes the local header directly and
+            # does int(duration / 10) on whatever it is given, so a one-page
+            # save needs scalars where a multi-page save needs lists.
+            "duration": self._durations[0] if single else self._durations,
+            "disposal": self._disposals[0] if single else self._disposals,
+            "transparency": len(self.palette),
+            "optimize": True,
+        }
+        if self._loop is not None:
+            options["loop"] = self._loop
+        pages[0].save(dest, **options)
+
+
 def open_source(
     path: Path | str, palette: Palette, *, keep_metadata: bool = False
 ) -> Source:
@@ -123,4 +217,6 @@ def open_source(
     suffix = resolved.suffix.lower()
     if suffix in STILL_SUFFIXES:
         return StillSource(resolved, palette, keep_metadata=keep_metadata)
+    if suffix in GIF_SUFFIXES:
+        return GifSource(resolved, palette, keep_metadata=keep_metadata)
     raise UnsupportedFormatError(resolved)
