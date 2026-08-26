@@ -8,9 +8,10 @@ from types import ModuleType
 
 import numpy as np
 import pytest
-from conftest import pixel_hash
+from conftest import ANIMATED_GIF, pixel_hash, read_gif
 
 FIXTURE_SOURCE_HASH = "1868cdf9393475de"
+GIF_SOURCE_HASH = "32da3bc3f594b4dc"
 EXAMPLE_SHAPE = (984, 3490, 4)
 FIXTURE_SHAPE = (120, 200, 4)
 
@@ -49,3 +50,41 @@ def test_committed_fixture_matches_its_generator(
 ) -> None:
     """The PNG in git is exactly what make_fixtures.py produces today."""
     assert np.array_equal(still_rgba, fixture_generator.build_still())
+
+
+def test_gif_fixture_matches_its_committed_hash(
+    animated_frames: list[np.ndarray],
+) -> None:
+    assert len(animated_frames) == 4
+    assert animated_frames[0].shape == (48, 64, 4)
+    assert pixel_hash(np.concatenate(animated_frames)) == GIF_SOURCE_HASH
+
+
+def test_gif_fixture_carries_timing_and_disposal() -> None:
+    _, durations, disposals, loop = read_gif(ANIMATED_GIF)
+    assert durations == [40, 80, 120, 160]
+    assert disposals == [0, 2, 1, 2]
+    assert loop == 0
+
+
+def test_gif_fixture_has_transparency(animated_frames: list[np.ndarray]) -> None:
+    """Frames 1 and 3 show fewer transparent pixels because disposal 2
+    composites them over the previous frame. That is the shape the round-trip
+    test compares against."""
+    counts = [int((f[..., 3] == 0).sum()) for f in animated_frames]
+    assert counts == [144, 12, 144, 12]
+
+
+@pytest.mark.slow
+def test_committed_gif_matches_its_generator(
+    animated_frames: list[np.ndarray], fixture_generator: ModuleType
+) -> None:
+    """Compares counts and shapes, not bytes.
+
+    A byte comparison would also assert that Pillow's GIF encoder stays
+    byte-stable across versions, which is not a property this project needs.
+    The committed hash above is what pins the fixture's content.
+    """
+    built = fixture_generator.build_animated()
+    assert len(built) == len(animated_frames)
+    assert [f.shape for f in built] == [f.shape for f in animated_frames]
