@@ -101,7 +101,12 @@
         in
         pkgs.runCommandLocal "gruvbox-factory-${name}"
           {
-            nativeBuildInputs = [ (mkTestEnv system python) ];
+            nativeBuildInputs = [
+              (mkTestEnv system python)
+              # ffmpeg-python shells out to the binary. headless drops X11,
+              # SDL and the GUI codecs, none of which this drives.
+              pkgs.ffmpeg-headless
+            ];
           }
           ''
             cp -r ${self} source

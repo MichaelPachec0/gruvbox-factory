@@ -18,6 +18,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import ffmpeg
 import numpy as np
 import pytest
 from PIL import Image
@@ -26,6 +27,7 @@ TESTS_DIR = Path(__file__).parent
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 REPO_ROOT = TESTS_DIR.parent
 EXAMPLE_PNG = REPO_ROOT / "example.png"
+ANIMATED_GIF = FIXTURES_DIR / "animated.gif"
 
 
 def pixel_hash(array: np.ndarray) -> str:
@@ -66,3 +68,64 @@ def isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     return cache_home
+
+
+def read_gif(path: Path) -> tuple[list[np.ndarray], list[int], list[int], int]:
+    """Frames, durations, disposals and loop from a GIF.
+
+    Disposal comes from image.disposal_method after seek, never from
+    frame.info["disposal"], which Pillow leaves as None on every frame.
+    Frames are converted explicitly because Pillow hands out frame 0 as P and
+    later frames as RGBA, having composited them.
+    """
+    image = Image.open(path)
+    frames, durations, disposals = [], [], []
+    for index in range(image.n_frames):
+        image.seek(index)
+        frames.append(np.array(image.convert("RGBA")))
+        durations.append(image.info.get("duration", 100))
+        disposals.append(image.disposal_method)
+    return frames, durations, disposals, image.info.get("loop", 0)
+
+
+@pytest.fixture(scope="session")
+def animated_gif_path() -> Path:
+    return ANIMATED_GIF
+
+
+@pytest.fixture(scope="session")
+def animated_frames() -> list[np.ndarray]:
+    return read_gif(ANIMATED_GIF)[0]
+
+
+@pytest.fixture(scope="session")
+def sample_video(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A one second 64x48 12fps H.264 clip with an AAC track.
+
+    Encoded at test time rather than committed: libx264 output is not stable
+    across ffmpeg versions or build flags, so a committed MP4 could never be
+    asserted against its own generator the way the PNG and GIF fixtures are.
+
+    Built through ffmpeg-python, the same binding the video adapter uses, so a
+    broken binding fails here with a clear message instead of deep inside an
+    adapter test. If ffmpeg is missing this raises rather than skipping: a
+    skip would let a check derivation that lost ffmpeg report green while
+    silently testing no video at all.
+    """
+    destination = tmp_path_factory.mktemp("video") / "sample.mp4"
+    video = ffmpeg.input("testsrc=size=64x48:rate=12:duration=1", f="lavfi")
+    audio = ffmpeg.input("sine=frequency=440:duration=1", f="lavfi")
+    (
+        ffmpeg.output(
+            video,
+            audio,
+            str(destination),
+            vcodec="libx264",
+            pix_fmt="yuv420p",
+            acodec="aac",
+            shortest=None,
+        )
+        .overwrite_output()
+        .run(quiet=True)
+    )
+    return destination
