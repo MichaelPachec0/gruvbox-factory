@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
       - uses: DeterminateSystems/magic-nix-cache-action@v14
       - name: ruff check
         run: nix build .#checks.x86_64-linux.lint -L
@@ -35,7 +35,7 @@ jobs:
         interpreter: [py313, py314, py314t]
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
       - uses: DeterminateSystems/magic-nix-cache-action@v14
       - name: build environment
         run: nix build .#${{ matrix.interpreter }} -L
